@@ -1,64 +1,71 @@
 # HANDOFF.md — Gaming Café Booking Platform
 
-**Last updated:** 2026-06-13
-**Session summary:** Solidified the core product assumptions to optimize for minimum UX friction (Phone/OTP checkouts) and zero-headache admin walk-ins (QR code scanning). We architected the multi-tenant PostgreSQL schema to support tier-based inventory using `tstzrange` overlaps, and successfully built the SQLAlchemy 2.0 `models.py` file implementing these rules. We also created a `bridge.md` file to expose Antigravity's internal workflows to your external planning LLM.
+**Last updated:** 2026-06-16
+**Session summary:** Scaffolded the core FastAPI application. Created `main.py` containing the app bootstrapper and database connection ping health check. Configured asynchronous session management in `database.py` utilizing SQLAlchemy 2.0 `AsyncSession`. Wrote validation and serialization schemas in `schemas.py` for booking records, addressing PostgreSQL range types translation.
 
 ## Current System State
 
 **What works right now:**
+- Database models (`app/models/models.py`) are fully mapped.
+- Alembic database migration environment is configured and the initial migration script (`e6edd257a7ab_initial_schema.py`) is complete with `btree_gist` enabled.
+- Asynchronous database engine pool and dependency injection sessions are set up (`app/database.py`).
+- Pydantic models for booking inputs validation (`BookingCreate`) and output serialization (`BookingResponse`) are ready (`app/schemas.py`).
+- Core FastAPI bootstrap app is complete (`app/main.py`) with a database connection verification route.
 
-- The foundational database logic (SQLAlchemy models) for users, multi-tenant cafes, staff audit trails, inventory tiers, and time-range bookings is completely written.
-- The external LLM integration bridge is documented.
-  **What is broken or incomplete:**
-- No API routes, schemas, or services exist yet. The models are purely conceptual in code.
-  **What was NOT done that was planned:**
-- We haven't generated the Alembic migrations yet because we paused to ensure you understood the Postgres `ExcludeConstraint` logic first.
+**What is broken or incomplete:**
+- Database tables do not exist physically yet (migrations have not been executed on a live PostgreSQL database because Docker/Postgres is not running on the host system yet).
+- API routes and business logic services for actual booking orchestration do not exist yet.
+
+**What was NOT done that was planned:**
+- Running the migrations (`alembic upgrade head`) was deferred until the user installs/starts a local PostgreSQL database or Docker instance.
 
 ## Architecture as of now
 
-A multi-tenant SaaS backend using FastAPI + SQLAlchemy 2.0 + PostgreSQL. The system uses shared-schema isolation (via `cafe_id` on all tables) and leverages Postgres' native `btree_gist` and `tstzrange` capabilities to handle complex time-bucket overlaps mathematically at the database layer.
+Multi-tenant backend SaaS using FastAPI + async SQLAlchemy 2.0 + PostgreSQL. 
+* Database isolation is enforced via a `cafe_id` column.
+* Slot booking safety uses PostgreSQL's timestamp range (`TSTZRANGE`) and a GiST exclusion constraint to mathematically prevent double bookings on the same physical PC.
 
 **Key files:**
-
-- `bridge.md`: Exposes the `gc_*` slash commands so the external LLM can trigger Antigravity's specific learning/building modules.
-- `architecture/data_models.md`: The complete documentation of the MVP relational schema and technical tradeoffs.
-- `app/models/models.py`: The production-ready SQLAlchemy 2.0 DeclarativeBase models containing our entities and constraints.
+- `app/models/models.py`: Database model definitions.
+- `docker-compose.yml`: Local PostgreSQL and Redis setup.
+- `alembic/env.py`: Alembic environment config with metadata and async helper.
+- `alembic/versions/e6edd257a7ab_initial_schema.py`: Initial database schema migration.
+- `app/database.py`: Async engine configuration and session provider.
+- `app/schemas.py`: Pydantic input/output schemas for Booking.
+- `app/main.py`: FastAPI application setup and healthchecks.
 
 ## Database State
 
-**Migration status:** Not initialized. Alembic has not been run yet.
+**Migration status:** Initialized. Revision `e6edd257a7ab` is pending execution.
 **Tables that exist (in code):** `users`, `cafes`, `cafe_staff`, `pc_tiers`, `physical_pcs`, `bookings`.
-**Pending schema changes:** Need to manually ensure `CREATE EXTENSION IF NOT EXISTS btree_gist;` is added to the first Alembic migration script before applying it, otherwise the `ExcludeConstraint` on `bookings` will fail.
+**Pending schema changes:** Run `alembic upgrade head` once a database connection is active.
 
 ## Environment
 
-- Requires PostgreSQL 15+ (for modern range types and indexing).
-- Requires the `btree_gist` extension to be enabled in the target database.
+- Database: localhost:5432 (defaulting to `postgresql+asyncpg://postgres:postgres@localhost:5432/gamingcafe`)
+- Redis: localhost:6379
 
 ## Next Steps (in order)
 
-1. **Initialize Alembic:** Run `alembic init`, configure `env.py` to point to our models, and generate the first migration.
-2. **Inject Extension:** Manually edit the generated migration to execute `CREATE EXTENSION IF NOT EXISTS btree_gist;` before table creation.
-3. **Pydantic Validation:** Move to Step 1 of the `/gc_build` workflow and create the `app/schemas/` models for validating incoming booking requests.
-4. **Service Layer:** Build the business logic in `app/services/` that handles the row-level locking (`SELECT FOR UPDATE`) when creating a booking.
+1. **Spin up PostgreSQL & Redis:** Install Docker Desktop (or local PostgreSQL) and run `docker compose up -d`.
+2. **Apply migrations:** Run `alembic upgrade head` to construct the tables, indexes, and exclusion constraint.
+3. **Run Dev Server:** Start FastAPI dev server using `uvicorn app.main:app --reload`.
+4. **Service Layer:** Build business services with row-level locks on `pc_tiers` to prevent race conditions during booking.
 
 ## Concepts Uzair learned this session
 
-- **GiST Indexes & ExcludeConstraints:** How PostgreSQL can mathematically prevent two rows from having overlapping time ranges (`tstzrange` using the `&&` operator) while simultaneously checking equality on another column (the PC ID).
-- **Advisory / Row-Level Locking:** Why we must lock the `pc_tiers` row when booking a tier-based slot to prevent race conditions during the `COUNT(*)` check.
+- **Pydantic vs. SQLAlchemy Models:** Understanding that SQLAlchemy handles database storage, constraints, and sessions, whereas Pydantic manages data shape validation and serialization at HTTP boundaries.
+- **Handling Database Ranges in JSON:** Serializing PostgreSQL-native range types (`TSTZRANGE`) into separate client-friendly fields (`start_time` and `end_time`) using Pydantic validation decorators (`@model_validator`).
 
 ## Decisions made this session
 
-- **Auth:** Guest Checkout (Phone/OTP) / Email. Phone implicitly becomes the account to drastically reduce funnel friction.
-- **Inventory:** Tier-based (e.g., VIP Rig) rather than Specific PC booking to prevent fragmentation and optimize utilization.
-- **Booking Time:** Dynamic time buckets (min 1 hr, 30-min increments) stored natively as ranges, rather than rigid 1-hour chunks.
-- **Admin Workflow:** QR-code based instant check-in. The Admin scans the user's booking and makes 1 click to auto-assign a physical PC.
+- **Async Migrations:** Switched Alembic to the async configuration template to cleanly handle `asyncpg` drivers and async engine context.
+- **Self-Healing Extension Migration:** Injected the extension check directly in the SQL upgrade step of the migration instead of relying on manual root operations.
 
 ## Open questions
 
-- Are we going to use Fast2SMS exclusively for OTPs, or will we need a fallback provider?
-- How will we handle payment gateway (Razorpay) webhooks intersecting with the row-level locks during booking confirmation?
+- None for this stage.
 
 ## Warnings for next session
 
-Do not blindly run `alembic upgrade head` on the first migration without adding the GiST extension first. It will throw an obscure Postgres syntax error on the `bookings` table constraint.
+- Ensure Docker or a local PostgreSQL service is running before attempting to execute `alembic upgrade head`.

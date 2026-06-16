@@ -4,7 +4,7 @@
 ---
 
 ## Dependency Injection
-**Date learned:**
+**Date learned:** 2026-06-16
 **Why it exists:** To share resources (DB sessions, Redis connections, current user) across routes without global state or repetitive code.
 **Mental model:** FastAPI automatically creates and passes "dependencies" to route functions. You declare what you need, FastAPI figures out how to provide it.
 **How it works:** FastAPI inspects function signatures. Anything typed as `Depends(something)` gets resolved before your function runs. Depends can depend on other Depends — it's a DAG.
@@ -12,7 +12,7 @@
   - Creating a DB session per request without closing it (use async generator pattern)
   - Making dependencies that do too much (keep them focused)
   - Not handling async dependencies properly
-**Used in our project:** `get_db()`, `get_redis()`, `get_current_user()`, `require_cafe_admin()`
+**Used in our project:** `get_db()` async generator in `app/database.py` yields DB sessions to endpoints and automatically closes them in a `finally` block.
 **My explanation:**
 
 ---
@@ -40,14 +40,14 @@
 ---
 
 ## Pydantic Models vs SQLAlchemy Models
-**Date learned:**
-**Why it exists:** Two different jobs. SQLAlchemy models describe the database. Pydantic models describe the API interface. They should NOT be the same thing.
-**Mental model:** SQLAlchemy = blueprint of storage. Pydantic = contract with the client. Conflating them means your DB structure leaks into your API or vice versa.
-**How it works:** You create SQLAlchemy models for the ORM, Pydantic schemas for request/response. Map between them manually or with orm_mode.
+**Date learned:** 2026-06-16
+**Why it exists:** Separates database storage concerns from API contract concerns. Forces clean validation before database interaction and hides sensitive fields on responses.
+**Mental model:** SQLAlchemy = how we store the data in the physical file drawer. Pydantic = the application form the user submits, or the public receipt we print out. They serve different purposes.
+**How it works:** SQLAlchemy structures tables, types, and constraints (like ranges). Pydantic parses incoming JSON bodies (converting strings to datetime and verifying constraints) and serializes outgoing SQLAlchemy objects into clean JSON.
 **Common mistakes:**
-  - Using SQLAlchemy models as response models (exposes internal fields)
-  - Forgetting `from_orm=True` / `model_validate` when converting
-**Used in our project:** Every endpoint has separate schema classes
+  - Exposing internal database fields (like `qr_code_token` or keys) to users by returning raw SQLAlchemy models directly.
+  - Relying on SQLAlchemy to catch format/type errors (causes DB crashes/transactions aborting) instead of filtering them at the boundary with Pydantic.
+**Used in our project:** Created `BookingCreate` for parsing incoming payloads and `BookingResponse` with a `@model_validator` to extract PostgreSQL range elements (`lower`/`upper`) into flat `start_time` and `end_time` parameters.
 **My explanation:**
 
 ---

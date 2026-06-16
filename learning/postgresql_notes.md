@@ -65,14 +65,26 @@
 ---
 
 ## Alembic Migrations
-**Date learned:**
-**Why it exists:** Your database schema will change. Without migrations, you're manually editing live database tables. Migrations are version-controlled, reversible schema changes.
-**Mental model:** Git for your database schema. Each migration is a commit. You can go forward (upgrade) or backward (downgrade).
-**How it works:** Alembic compares your SQLAlchemy models against the current DB state and generates migration scripts. You review, then run them.
+**Date learned:** 2026-06-16
+**Why it exists:** Database schemas evolve over time. Hand-written SQL alter tables are error-prone and hard to track across development/production environments. Migrations provide version-controlled, reproducible database evolution.
+**Mental model:** Git commit history for your database schema. Upgrades go forward; downgrades roll back.
+**How it works:** Alembic uses an engine connection and reads the model metadata from Python. It computes diffs between models and the actual DB state, producing migration scripts inside `alembic/versions/`.
 **Common mistakes:**
-  - Auto-generating without reviewing (can generate incorrect or destructive migrations)
-  - Not running migrations in the correct order
-  - Making manual DB changes that diverge from Alembic's history
-**Used in our project:** All schema changes go through Alembic — never manual SQL
-**My explanation:**
+  - Auto-generating and running migrations without manual review (autogenerate can miss custom extensions, indexes, or drop tables unexpectedly).
+  - Diverging database state by executing manual DDL commands directly on PostgreSQL instead of through migrations.
+**Used in our project:** Scaffolded the initial async Alembic migration (`e6edd257a7ab_initial_schema.py`) to create our 6 tables.
+**My explanation:** 
+
+---
+
+## PostgreSQL Range Types and btree_gist Extension
+**Date learned:** 2026-06-16
+**Why it exists:** Traditional queries check simple scalar bounds (`start_time <= check_time AND end_time >= check_time`). This is verbose and slow to query/index. Range types store start and end values as a single entity.
+**Mental model:** A time range is like a physical block. Checking if two blocks collide (overlap) uses a specialized range overlap operator (`&&`).
+**How it works:** PostgreSQL native `TSTZRANGE` column represents a timezone-aware timestamp range. To index overlap checks, Postgres uses GiST (Generalized Search Tree) indexes.
+However, we want to combine scalar equality (`assigned_pc_id = :pc_id`) and range overlap (`booking_time && :booking_time`) in a single exclusion index. Since standard GiST indexes do not support scalar operations (like equals on UUID), we enable the `btree_gist` extension to bridge this gap.
+**Common mistakes:**
+  - Forgetting to create the extension (`CREATE EXTENSION IF NOT EXISTS btree_gist;`) before creating tables with exclusion constraints, causing migration failures.
+**Used in our project:** Applied in `exclude_overlapping_pcs` exclusion constraint on the `bookings` table to prevent booking collisions on physical PCs.
+**My explanation:** 
 
